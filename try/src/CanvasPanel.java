@@ -24,7 +24,6 @@ class CanvasPanel extends JPanel {
     // 連線和拖動相關
     private Object[] startShape = null, endShape = null, draggingObject = null;
     private int[] startControlPoint = null, currentMousePos = null;
-    private List<int[]> intermediatePoints = new ArrayList<>();
     private boolean isDraggingLink = false, isDraggingSelection = false, isDraggingObject = false;
     private int dragStartX = -1, dragStartY = -1, dragCurrentX = -1, dragCurrentY = -1;
     private int lastDragX = -1, lastDragY = -1;
@@ -82,13 +81,15 @@ class CanvasPanel extends JPanel {
                 dragStartY = dragCurrentY = y;
             }
         } else if (isLinkMode()) {
-            if (!isDraggingLink) startDraggingLink(x, y);
-            else continueDraggingLink(x, y);
+            // 開始拖曳連線
+            startDraggingLink(x, y);
         }
         repaint();
     }
     
     private void handleMouseReleased(MouseEvent e) {
+        int x = e.getX(), y = e.getY();
+        
         if (currentMode.equals("select")) {
             if (isDraggingSelection) {
                 isDraggingSelection = false;
@@ -108,6 +109,15 @@ class CanvasPanel extends JPanel {
                 draggingObject = null;
                 lastDragX = lastDragY = -1;
             }
+        } else if (isLinkMode() && isDraggingLink) {
+            // 嘗試完成連線或取消
+            if (startControlPoint != null) {
+                completeDraggingLink(x, y);
+            }
+            // 無論是否成功連線，都重置拖曳狀態
+            isDraggingLink = false;
+            startControlPoint = null;
+            startShape = null;
         }
         repaint();
     }
@@ -136,6 +146,11 @@ class CanvasPanel extends JPanel {
     
     // 連線相關方法
     private void startDraggingLink(int x, int y) {
+        // 重置任何先前的拖曳狀態
+        startShape = null;
+        startControlPoint = null;
+        isDraggingLink = false;
+        
         // 檢查所有選中的物件，不僅是最上層的
         for (Object[] selectedShape : selectedShapes) {
             // 確保物件沒有被其他物件覆蓋
@@ -147,7 +162,6 @@ class CanvasPanel extends JPanel {
                     startControlPoint = findControlPointAt(x, y);
                     if (startControlPoint != null) {
                         isDraggingLink = true;
-                        intermediatePoints.clear();
                         return; // 找到起點後，立即返回
                     }
                 }
@@ -155,7 +169,7 @@ class CanvasPanel extends JPanel {
         }
     }
     
-    private void continueDraggingLink(int x, int y) {
+    private void completeDraggingLink(int x, int y) {
         int[] endControlPoint = findControlPointAt(x, y);
         if (endControlPoint != null) {
             endShape = findShapeAtControlPoint(x, y);
@@ -163,18 +177,16 @@ class CanvasPanel extends JPanel {
                 links.add(new Object[]{
                     currentMode, startShape, endShape,
                     startControlPoint[0], startControlPoint[1],
-                    endControlPoint[0], endControlPoint[1],
-                    intermediatePoints.isEmpty() ? null : intermediatePoints.toArray(new int[0][])
+                    endControlPoint[0], endControlPoint[1]
                 });
-                
-                isDraggingLink = false;
-                startControlPoint = null;
-                endShape = null;
-                intermediatePoints.clear();
             }
-        } else {
-            intermediatePoints.add(new int[]{x, y});
         }
+        
+        // 無論成功與否，都清除狀態
+        isDraggingLink = false;
+        startControlPoint = null;
+        startShape = null;
+        endShape = null;
     }
     
     // 形狀查找和檢查方法
@@ -501,7 +513,6 @@ class CanvasPanel extends JPanel {
     private void resetDragStates() {
         isDraggingLink = isDraggingSelection = isDraggingObject = false;
         startControlPoint = null;
-        intermediatePoints.clear();
         dragStartX = dragStartY = dragCurrentX = dragCurrentY = -1;
         draggingObject = null;
         lastDragX = lastDragY = -1;
@@ -525,7 +536,7 @@ class CanvasPanel extends JPanel {
         drawShapes(g);
         drawSelectionHighlights(g);
         drawConnections(g);
-        drawLabels(g); // 新增這行
+        drawLabels(g);
         drawControlPoints(g);
         drawDraggingLink(g);
         drawSelectionBox(g);
@@ -596,23 +607,10 @@ class CanvasPanel extends JPanel {
         String type = (String) link[0];
         int x1 = (int) link[3], y1 = (int) link[4];
         int x2 = (int) link[5], y2 = (int) link[6];
-        int[][] midPoints = (link.length >= 8 && link[7] != null) ? (int[][]) link[7] : null;
         
-        // 繪製線段
-        if (midPoints == null || midPoints.length == 0) {
-            g.drawLine(x1, y1, x2, y2);
-            drawArrow(g, x1, y1, x2, y2, type);
-        } else {
-            g.drawLine(x1, y1, midPoints[0][0], midPoints[0][1]);
-            
-            for (int i = 0; i < midPoints.length - 1; i++) {
-                g.drawLine(midPoints[i][0], midPoints[i][1], midPoints[i+1][0], midPoints[i+1][1]);
-            }
-            
-            int lastIdx = midPoints.length - 1;
-            g.drawLine(midPoints[lastIdx][0], midPoints[lastIdx][1], x2, y2);
-            drawArrow(g, midPoints[lastIdx][0], midPoints[lastIdx][1], x2, y2, type);
-        }
+        // 繪製直線
+        g.drawLine(x1, y1, x2, y2);
+        drawArrow(g, x1, y1, x2, y2, type);
         
         // 繪製控制點
         drawControlPoint(g, x1, y1);
@@ -708,35 +706,10 @@ class CanvasPanel extends JPanel {
         
         g.setColor(Color.BLACK);
         
-        if (!intermediatePoints.isEmpty()) {
-            // 繪製從起點到第一個中間點的線段
-            int x1 = startControlPoint[0], y1 = startControlPoint[1];
-            int[] firstMid = intermediatePoints.get(0);
-            g.drawLine(x1, y1, firstMid[0], firstMid[1]);
-            
-            // 繪製中間點之間的線段
-            for (int i = 0; i < intermediatePoints.size() - 1; i++) {
-                int[] p1 = intermediatePoints.get(i);
-                int[] p2 = intermediatePoints.get(i + 1);
-                g.drawLine(p1[0], p1[1], p2[0], p2[1]);
-            }
-            
-            // 繪製最後一個中間點到當前滑鼠位置的線段
-            int[] lastMid = intermediatePoints.get(intermediatePoints.size() - 1);
-            g.drawLine(lastMid[0], lastMid[1], currentMousePos[0], currentMousePos[1]);
-            drawArrow(g, lastMid[0], lastMid[1], currentMousePos[0], currentMousePos[1], currentMode);
-        } else {
-            // 直接從起點到當前滑鼠位置繪製線段
-            g.drawLine(startControlPoint[0], startControlPoint[1], currentMousePos[0], currentMousePos[1]);
-            drawArrow(g, startControlPoint[0], startControlPoint[1], 
-                     currentMousePos[0], currentMousePos[1], currentMode);
-        }
-        
-        // 標記中間點
-        g.setColor(Color.BLUE);
-        for (int[] point : intermediatePoints) {
-            g.fillOval(point[0] - 4, point[1] - 4, 8, 8);
-        }
+        // 直接從起點到當前滑鼠位置繪製線段
+        g.drawLine(startControlPoint[0], startControlPoint[1], currentMousePos[0], currentMousePos[1]);
+        drawArrow(g, startControlPoint[0], startControlPoint[1], 
+                 currentMousePos[0], currentMousePos[1], currentMode);
     }
     
     private void drawSelectionBox(Graphics g) {
